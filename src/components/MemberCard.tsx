@@ -50,11 +50,17 @@ export default function MemberCard({ pastDonations, onRegisterSuccess, onAdminLo
       });
       if (res.ok) {
         const u = await res.json();
+        
+        if (u.role === "admin") {
+           onAdminLogin();
+           return;
+        }
+        
         setRegisteredUser(u);
         localStorage.setItem("lazisna_member", JSON.stringify(u));
-        onRegisterSuccess(u.name, u.wa, undefined);
+        onRegisterSuccess(u.name, u.wa || "", undefined);
       } else {
-        alert("Gagal otentikasi.");
+        alert("Gagal otentikasi. Periksa email/password.");
       }
     } catch (e) {
       console.error(e);

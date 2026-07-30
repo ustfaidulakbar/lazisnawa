@@ -3,6 +3,10 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import mysql from 'mysql2/promise';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+
 dotenv.config();
 
 // In-memory data store
@@ -26,27 +30,97 @@ let ustadzList = [
 ];
 let prayerWall: any[] = [];
 
+let dbPool: mysql.Pool | null = null;
+const getDB = () => {
+  if (!dbPool) {
+    if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
+      console.warn("Database credentials not fully provided in .env (DB_HOST, DB_USER, DB_NAME). Using mock DB for now.");
+      return null;
+    }
+    dbPool = mysql.createPool({
+      host: process.env.DB_HOST,
+      user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
+      waitForConnections: true,
+      connectionLimit: 10,
+    });
+  }
+  return dbPool;
+};
+
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
+  const JWT_SECRET = process.env.JWT_SECRET || "lazisna-super-secret-key";
 
   app.use(express.json());
 
   app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
   // Auth endpoints
-  app.post("/api/auth/login", (req, res) => {
+  app.post("/api/auth/login", async (req, res) => {
     const { email, password } = req.body;
+    
+    // Mock Admin Fallback for testing without DB
     if (email === "admin@lazisna.org" && password === "admin123") {
-      res.json({ id: "admin", name: "Administrator", email });
-    } else {
-      res.json({ id: "user-" + Date.now(), name: email.split("@")[0], email, wa: "-" });
+      return res.json({ id: "admin", name: "Administrator", email, role: "admin", token: jwt.sign({ id: "admin", role: "admin" }, JWT_SECRET) });
+    }
+
+    try {
+      const db = getDB();
+      if (!db) {
+         // Fallback mock mode
+         return res.json({ id: "user-" + Date.now(), name: email.split("@")[0], email, wa: "-", role: "reguler", token: "mock-token" });
+      }
+
+      const [rows]: any = await db.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
+      if (rows.length === 0) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      const user = rows[0];
+      const isValid = await bcrypt.compare(password, user.password);
+      if (!isValid) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+
+      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '1d' });
+      res.json({ id: user.id, name: user.nama, email: user.email, role: user.role, token });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Server error" });
     }
   });
 
-  app.post("/api/auth/register", (req, res) => {
+  app.post("/api/auth/register", async (req, res) => {
     const { email, password, name } = req.body;
-    res.json({ id: "user-" + Date.now(), name: name || email.split("@")[0], email, wa: "-" });
+    
+    try {
+      const db = getDB();
+      if (!db) {
+         return res.json({ id: "user-" + Date.now(), name: name || email.split("@")[0], email, wa: "-", role: "reguler", token: "mock-token" });
+      }
+
+      const [existing]: any = await db.execute('SELECT id FROM users WHERE email = ?', [email]);
+      if (existing.length > 0) {
+        return res.status(400).json({ error: "Email already registered" });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const role = 'reguler'; 
+      
+      const [result]: any = await db.execute(
+        'INSERT INTO users (nama, email, password, role) VALUES (?, ?, ?, ?)',
+        [name, email, hashedPassword, role]
+      );
+
+      const token = jwt.sign({ id: result.insertId, role }, JWT_SECRET, { expiresIn: '1d' });
+      res.json({ id: result.insertId, name, email, role, token });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Server error" });
+    }
   });
 
   app.post("/api/settings", (req, res) => {
