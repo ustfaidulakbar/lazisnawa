@@ -1,0 +1,52 @@
+name: Build for cPanel
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Application
+        run: npm run build
+
+      - name: Prepare cPanel Artifact
+        run: |
+          mkdir cpanel-build
+          cp -r dist cpanel-build/
+          cp package.json cpanel-build/
+          cp package-lock.json cpanel-build/
+          cp .env.example cpanel-build/.env
+          
+          # cPanel Passenger biasanya mencari app.js atau server.js di root project
+          # Kita buat file app.js sederhana untuk mengarahkan ke dist/server.cjs
+          echo "require('./dist/server.cjs');" > cpanel-build/app.js
+          
+      - name: Zip Build
+        run: |
+          cd cpanel-build
+          zip -r ../lazisna-cpanel-build.zip ./* .env
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazisna-cpanel-build
+          path: lazisna-cpanel-build.zip
+          retention-days: 7
