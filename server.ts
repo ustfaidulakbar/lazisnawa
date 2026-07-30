@@ -51,7 +51,7 @@ const getDB = () => {
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
   const JWT_SECRET = process.env.JWT_SECRET || "lazisna-super-secret-key";
 
   app.use(express.json());
